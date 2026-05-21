@@ -114,3 +114,119 @@ async def get_all_users():
         if "user_id" in document:
             users.append(document["user_id"])
     return users
+
+
+# ==========================================================
+# 💬 Custom Filters (Replies)
+# ==========================================================
+
+async def add_filter(chat_id, keyword, response_type, response_content, caption=None):
+    """
+    response_type: 'text', 'photo', 'video', 'sticker', 'audio', 'document', 'animation', 'voice'
+    response_content: file_id or text
+    caption: optional caption for media
+    """
+    await db.filters.update_one(
+        {"chat_id": chat_id, "keyword": keyword},
+        {"$set": {
+            "chat_id": chat_id,
+            "keyword": keyword,
+            "type": response_type,
+            "content": response_content,
+            "caption": caption,
+        }},
+        upsert=True,
+    )
+
+
+async def get_filter(chat_id, keyword):
+    return await db.filters.find_one({"chat_id": chat_id, "keyword": keyword})
+
+
+async def get_all_filters(chat_id):
+    return await db.filters.find({"chat_id": chat_id}).to_list(length=None)
+
+
+async def delete_filter(chat_id, keyword):
+    await db.filters.delete_one({"chat_id": chat_id, "keyword": keyword})
+
+
+async def delete_all_filters(chat_id):
+    await db.filters.delete_many({"chat_id": chat_id})
+
+
+# ==========================================================
+# 🎭 Fun Lists
+# ==========================================================
+
+async def add_to_fun_list(chat_id, list_name, user_id, user_name):
+    await db.fun_lists.update_one(
+        {"chat_id": chat_id, "list_name": list_name, "user_id": user_id},
+        {"$set": {"user_name": user_name}},
+        upsert=True,
+    )
+
+
+async def remove_from_fun_list(chat_id, list_name, user_id):
+    await db.fun_lists.delete_one(
+        {"chat_id": chat_id, "list_name": list_name, "user_id": user_id}
+    )
+
+
+async def get_fun_list(chat_id, list_name):
+    return await db.fun_lists.find(
+        {"chat_id": chat_id, "list_name": list_name}
+    ).to_list(length=None)
+
+
+async def is_in_fun_list(chat_id, list_name, user_id):
+    return bool(
+        await db.fun_lists.find_one(
+            {"chat_id": chat_id, "list_name": list_name, "user_id": user_id}
+        )
+    )
+
+
+async def clear_fun_list(chat_id, list_name):
+    await db.fun_lists.delete_many({"chat_id": chat_id, "list_name": list_name})
+
+
+# ==========================================================
+# 📋 Rules
+# ==========================================================
+
+async def set_rules(chat_id, text):
+    await db.rules.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"text": text}},
+        upsert=True,
+    )
+
+
+async def get_rules(chat_id):
+    data = await db.rules.find_one({"chat_id": chat_id})
+    return data.get("text") if data else None
+
+
+async def clear_rules(chat_id):
+    await db.rules.delete_one({"chat_id": chat_id})
+
+
+# ==========================================================
+# 🧭 User States (multi-step conversations)
+# ==========================================================
+
+async def set_user_state(user_id, chat_id, state, extra=None):
+    await db.user_states.update_one(
+        {"user_id": user_id, "chat_id": chat_id},
+        {"$set": {"state": state, "extra": extra}},
+        upsert=True,
+    )
+
+
+async def get_user_state(user_id, chat_id):
+    return await db.user_states.find_one({"user_id": user_id, "chat_id": chat_id})
+
+
+async def clear_user_state(user_id, chat_id):
+    await db.user_states.delete_one({"user_id": user_id, "chat_id": chat_id})

@@ -25,28 +25,35 @@ logger.setLevel(logging.INFO)
 # Global helper
 # ==========================================================
 
-async def is_power(client, chat_id: int, user_id: int) -> bool:
-    member = await client.get_chat_member(chat_id, user_id)
-    return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+async def is_power(client, chat_id: int, user_id) -> bool:
+    if user_id is None:
+        return False
+    try:
+        member = await client.get_chat_member(chat_id, user_id)
+        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+    except Exception:
+        return False
 
 
 async def extract_target_user(client, message):
-    if message.reply_to_message:
+    if message.reply_to_message and message.reply_to_message.from_user:
         return message.reply_to_message.from_user
 
-    parts = message.text.split(maxsplit=1)
+    text = message.text or message.caption or ""
+    parts = text.split(maxsplit=1)
     if len(parts) < 2:
         return None
 
-    arg = parts[1]
+    arg = parts[1].strip()
 
     try:
         if arg.startswith("@"):
             return await client.get_users(arg)
         elif arg.isdigit():
             return await client.get_users(int(arg))
-    except:
+    except Exception:
         return None
+    return None
 
 
 async def handle_welcome(client, chat_id: int, users: list, chat_title: str):
@@ -56,13 +63,23 @@ async def handle_welcome(client, chat_id: int, users: list, chat_title: str):
 
     welcome_text = await db.get_welcome_message(chat_id) or DEFAULT_WELCOME
 
+    # Load rules (lazy, may be None)
+    try:
+        rules_text = await db.get_rules(chat_id)
+    except Exception:
+        rules_text = None
+    rules_block = rules_text if rules_text else ""
+
     for user in users:
+        if not user or getattr(user, "is_bot", False):
+            continue
         try:
             text = welcome_text.format(
                 username=user.username or user.first_name,
                 first_name=user.first_name,
                 mention=f"[{user.first_name}](tg://user?id={user.id})",
                 title=chat_title,
+                القوانين=rules_block,
             )
         except KeyError:
             text = DEFAULT_WELCOME.format(first_name=user.first_name, title=chat_title)
@@ -89,6 +106,10 @@ def register_group_commands(app: Client):
     
         user = cmu.new_chat_member.user
         new_status = cmu.new_chat_member.status
+
+        # Skip bots (including ourselves)
+        if not user or getattr(user, "is_bot", False):
+            return
     
         if new_status == ChatMemberStatus.MEMBER:
     
@@ -106,10 +127,10 @@ def register_group_commands(app: Client):
     
     @app.on_message(filters.group & filters.regex(r"^ترحيب"))
     async def welcome_toggle(client, message: Message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف أو المالك يمكنه استخدام هذا الأمر.")
     
-        parts = message.text.split(maxsplit=1)
+        parts = (message.text or message.caption or "").split(maxsplit=1)
         if len(parts) < 2 or parts[1].lower() not in ["on", "off"]:
             return await message.reply_text("⚙️ الاستخدام: /welcome on/off")
     
@@ -127,10 +148,10 @@ def register_group_commands(app: Client):
     
     @app.on_message(filters.group & filters.regex(r"^تعيين_ترحيب"))
     async def set_welcome(client, message: Message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("⚠️ فقط المشرف يمكنه استخدام هذا الأمر.")
     
-        parts = message.text.split(maxsplit=1)
+        parts = (message.text or message.caption or "").split(maxsplit=1)
         if len(parts) < 2:
             return await message.reply_text("🤖 الاستخدام: /setwelcome <رسالة>")
     
@@ -144,10 +165,10 @@ def register_group_commands(app: Client):
     
     @app.on_message(filters.group & filters.regex(r"^قفل"))
     async def lock_command(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
-        parts = message.text.split(maxsplit=1)
+        parts = (message.text or message.caption or "").split(maxsplit=1)
         if len(parts) < 2:
             return await message.reply_text("⚙️ الاستخدام: /lock <نوع>")
     
@@ -167,10 +188,10 @@ def register_group_commands(app: Client):
     
     @app.on_message(filters.group & filters.regex(r"^فتح"))
     async def unlock_command(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
-        parts = message.text.split(maxsplit=1)
+        parts = (message.text or message.caption or "").split(maxsplit=1)
         if len(parts) < 2:
             return await message.reply_text("⚙️ الاستخدام: /unlock <نوع>")
     
@@ -207,6 +228,8 @@ def register_group_commands(app: Client):
     
     @app.on_message(filters.group & ~filters.service, group=1)
     async def enforce_locks(client, message):
+        if not message.from_user:
+            return
         try:
             member = await client.get_chat_member(message.chat.id, message.from_user.id)
             if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
@@ -244,7 +267,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^طرد"))
     async def kick_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -270,7 +293,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^حظر"))
     async def ban_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -295,7 +318,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^رفع_حظر"))
     async def unban_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -320,7 +343,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^كتم"))
     async def mute_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -349,7 +372,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^رفع_كتم"))
     async def unmute_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -383,7 +406,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^تحذير"))
     async def warn_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -413,7 +436,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^التحذيرات"))
     async def warns_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -433,7 +456,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^مسح_تحذيرات"))
     async def resetwarns_user(client, message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -454,7 +477,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^ترقية"))
     async def promote_user(client: Client, message: Message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف أو المالك يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
@@ -505,7 +528,7 @@ def register_group_commands(app: Client):
     # ==========================================================
     @app.on_message(filters.group & filters.regex(r"^تخفيض"))
     async def demote_user(client: Client, message: Message):
-        if not await is_power(client, message.chat.id, message.from_user.id):
+        if not message.from_user or not await is_power(client, message.chat.id, message.from_user.id):
             return await message.reply_text("❌ فقط المشرف يمكنه استخدام هذا الأمر.")
     
         user = await extract_target_user(client, message)
