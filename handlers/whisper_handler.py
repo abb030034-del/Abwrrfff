@@ -96,10 +96,20 @@ def register_whisper_handler(app: Client):
         sender_id = sender.id if sender else 0
         sender_name = (sender.first_name if sender else None) or "مجهول"
 
+        # Resolve username to stable user_id at creation time
+        target_user_id = None
+        if target != "all":
+            try:
+                resolved = await client.get_users(target)
+                target_user_id = resolved.id
+            except Exception:
+                pass  # fallback to username check below
+
         whispers_store[whisper_id] = {
             "sender_id": sender_id,
             "sender_name": sender_name,
-            "target": target,  # 'all' or lowercase username
+            "target": target,           # 'all' or lowercase username (display)
+            "target_user_id": target_user_id,  # stable ID resolved at creation
             "text": text,
             "time": time.time(),
         }
@@ -156,18 +166,28 @@ def register_whisper_handler(app: Client):
             return await callback_query.answer("⚠️ غير معروف.", show_alert=True)
 
         target = data["target"]
-        user_username = (user.username or "").lower()
+        target_user_id = data.get("target_user_id")
 
-        is_allowed = (
-            target == "all"
-            or user.id == data["sender_id"]
-            or (user_username and user_username == target)
-        )
+        if target_user_id is not None:
+            # Use stable resolved ID — immune to username changes
+            is_allowed = (
+                target == "all"
+                or user.id == data["sender_id"]
+                or user.id == target_user_id
+            )
+        else:
+            # Fallback: username could not be resolved at creation time
+            user_username = (user.username or "").lower()
+            is_allowed = (
+                target == "all"
+                or user.id == data["sender_id"]
+                or (user_username and user_username == target)
+            )
 
         if not is_allowed:
             return await callback_query.answer(
                 "🚫 هذه الهمسة ليست لك.", show_alert=True
             )
 
-        # Show the whisper text in alert
-        await callback_query.answer(data["text"], show_alert=True)
+        # Show the whisper text in alert (Telegram limit: 200 chars)
+        await callback_query.answer(data["text"][:200], show_alert=True)
